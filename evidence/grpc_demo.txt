@@ -1,0 +1,64 @@
+
+========== grpc: normal inventory ==========
+
+$ python -m grpc_version.client apple 3     # direct gRPC call
+request:  item_id: "apple" quantity: 3 
+response: item_id: "apple" requested_quantity: 3 available_quantity: 10 available: true 
+
+$ python -m grpc_version.client banana 50
+request:  item_id: "banana" quantity: 50 
+error:    FAILED_PRECONDITION: insufficient stock for 'banana': requested 50, available 5
+
+$ curl -X POST http://127.0.0.1:8082/orders -H 'Content-Type: application/json' -d '{"item_id":"apple","quantity":3}'
+{"inventory":{"available":true,"available_quantity":10},"item_id":"apple","order_id":"391a8809","quantity":3,"status":"CONFIRMED"}
+
+-> HTTP 201 in 0.003032s
+
+$ curl -X POST http://127.0.0.1:8082/orders -H 'Content-Type: application/json' -d '{"item_id":"banana","quantity":50}'
+{"grpc_status":"FAILED_PRECONDITION","item_id":"banana","quantity":50,"reason":"insufficient stock for 'banana': requested 50, available 5","status":"REJECTED"}
+
+-> HTTP 409 in 0.002117s
+
+$ curl -X POST http://127.0.0.1:8082/orders -H 'Content-Type: application/json' -d '{"item_id":"mango","quantity":1}'
+{"grpc_status":"NOT_FOUND","item_id":"mango","quantity":1,"reason":"unknown item 'mango'","status":"REJECTED"}
+
+-> HTTP 404 in 0.002072s
+
+
+========== grpc: slow inventory (INVENTORY_DELAY_SECONDS=5, client limit 2s) ==========
+
+$ curl -X POST http://127.0.0.1:8082/orders -H 'Content-Type: application/json' -d '{"item_id":"apple","quantity":1}'
+{"error":"Deadline Exceeded","grpc_status":"DEADLINE_EXCEEDED","status":"FAILED"}
+
+-> HTTP 504 in 2.014363s
+
+
+========== grpc: Order Service still running after the failure ==========
+
+$ curl http://127.0.0.1:8082/health
+{"service":"order-grpc","status":"ok"}
+
+-> HTTP 200
+
+
+========== grpc: inventory back to normal, same Order Service process (no restart) ==========
+
+$ curl -X POST http://127.0.0.1:8082/orders -H 'Content-Type: application/json' -d '{"item_id":"laptop","quantity":1}'
+{"inventory":{"available":true,"available_quantity":2},"item_id":"laptop","order_id":"34d998d2","quantity":1,"status":"CONFIRMED"}
+
+-> HTTP 201 in 0.003041s
+
+
+========== grpc: Order Service log ==========
+
+2026-10-11 22:24:09,785 [order-grpc] order 391a8809 confirmed item=apple qty=3 (inventory 1ms)
+2026-10-11 22:24:09,785 [order-grpc] 127.0.0.1 - - [11/Oct/2026 22:24:09] "POST /orders HTTP/1.1" 201 -
+2026-10-11 22:24:09,813 [order-grpc] order rejected item=banana qty=50 -> FAILED_PRECONDITION
+2026-10-11 22:24:09,813 [order-grpc] 127.0.0.1 - - [11/Oct/2026 22:24:09] "POST /orders HTTP/1.1" 409 -
+2026-10-11 22:24:09,839 [order-grpc] order rejected item=mango qty=1 -> NOT_FOUND
+2026-10-11 22:24:09,839 [order-grpc] 127.0.0.1 - - [11/Oct/2026 22:24:09] "POST /orders HTTP/1.1" 404 -
+2026-10-11 22:24:14,627 [order-grpc] inventory call failed: DEADLINE_EXCEEDED after 2.0s deadline (item=apple)
+2026-10-11 22:24:14,628 [order-grpc] 127.0.0.1 - - [11/Oct/2026 22:24:14] "POST /orders HTTP/1.1" 504 -
+2026-10-11 22:24:14,656 [order-grpc] 127.0.0.1 - - [11/Oct/2026 22:24:14] "GET /health HTTP/1.1" 200 -
+2026-10-11 22:24:17,438 [order-grpc] order 34d998d2 confirmed item=laptop qty=1 (inventory 2ms)
+2026-10-11 22:24:17,438 [order-grpc] 127.0.0.1 - - [11/Oct/2026 22:24:17] "POST /orders HTTP/1.1" 201 -

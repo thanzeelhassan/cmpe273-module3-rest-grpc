@@ -1,0 +1,61 @@
+
+========== rest: normal inventory ==========
+
+$ curl -X POST http://127.0.0.1:8081/inventory/check -H 'Content-Type: application/json' -d '{"item_id":"apple","quantity":3}'
+{"available":true,"available_quantity":10,"item_id":"apple","requested_quantity":3}
+
+-> HTTP 200
+
+$ curl -X POST http://127.0.0.1:8080/orders -H 'Content-Type: application/json' -d '{"item_id":"apple","quantity":3}'
+{"inventory":{"available":true,"available_quantity":10,"item_id":"apple","requested_quantity":3},"item_id":"apple","order_id":"39ce23ed","quantity":3,"status":"CONFIRMED"}
+
+-> HTTP 201 in 0.006171s
+
+$ curl -X POST http://127.0.0.1:8080/orders -H 'Content-Type: application/json' -d '{"item_id":"banana","quantity":50}'
+{"inventory":{"available":false,"available_quantity":5,"error":"insufficient stock","item_id":"banana","requested_quantity":50},"item_id":"banana","quantity":50,"reason":"insufficient stock","status":"REJECTED"}
+
+-> HTTP 409 in 0.003167s
+
+$ curl -X POST http://127.0.0.1:8080/orders -H 'Content-Type: application/json' -d '{"item_id":"mango","quantity":1}'
+{"inventory":{"available":false,"error":"unknown item","item_id":"mango"},"item_id":"mango","quantity":1,"reason":"unknown item","status":"REJECTED"}
+
+-> HTTP 404 in 0.002931s
+
+
+========== rest: slow inventory (INVENTORY_DELAY_SECONDS=5, client limit 2s) ==========
+
+$ curl -X POST http://127.0.0.1:8080/orders -H 'Content-Type: application/json' -d '{"item_id":"apple","quantity":1}'
+{"error":"inventory service timed out after 2.0s","status":"FAILED"}
+
+-> HTTP 504 in 2.019751s
+
+
+========== rest: Order Service still running after the failure ==========
+
+$ curl http://127.0.0.1:8080/health
+{"service":"order-rest","status":"ok"}
+
+-> HTTP 200
+
+
+========== rest: inventory back to normal, same Order Service process (no restart) ==========
+
+$ curl -X POST http://127.0.0.1:8080/orders -H 'Content-Type: application/json' -d '{"item_id":"laptop","quantity":1}'
+{"inventory":{"available":true,"available_quantity":2,"item_id":"laptop","requested_quantity":1},"item_id":"laptop","order_id":"d1e34607","quantity":1,"status":"CONFIRMED"}
+
+-> HTTP 201 in 0.017646s
+
+
+========== rest: Order Service log ==========
+
+2026-10-11 22:23:50,154 [order-rest] order 39ce23ed confirmed item=apple qty=3 (inventory 4ms)
+2026-10-11 22:23:50,155 [order-rest] 127.0.0.1 - - [11/Oct/2026 22:23:50] "POST /orders HTTP/1.1" 201 -
+2026-10-11 22:23:50,184 [order-rest] order rejected item=banana qty=50 -> 409 (inventory 2ms)
+2026-10-11 22:23:50,184 [order-rest] 127.0.0.1 - - [11/Oct/2026 22:23:50] "POST /orders HTTP/1.1" 409 -
+2026-10-11 22:23:50,214 [order-rest] order rejected item=mango qty=1 -> 404 (inventory 2ms)
+2026-10-11 22:23:50,214 [order-rest] 127.0.0.1 - - [11/Oct/2026 22:23:50] "POST /orders HTTP/1.1" 404 -
+2026-10-11 22:23:55,002 [order-rest] inventory timed out after 2.0s (item=apple)
+2026-10-11 22:23:55,003 [order-rest] 127.0.0.1 - - [11/Oct/2026 22:23:55] "POST /orders HTTP/1.1" 504 -
+2026-10-11 22:23:55,030 [order-rest] 127.0.0.1 - - [11/Oct/2026 22:23:55] "GET /health HTTP/1.1" 200 -
+2026-10-11 22:23:57,850 [order-rest] order d1e34607 confirmed item=laptop qty=1 (inventory 16ms)
+2026-10-11 22:23:57,850 [order-rest] 127.0.0.1 - - [11/Oct/2026 22:23:57] "POST /orders HTTP/1.1" 201 -
